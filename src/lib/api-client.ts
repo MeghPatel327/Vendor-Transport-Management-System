@@ -12,8 +12,12 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Redirect to login if unauthorized
-      window.location.href = '/login'
+      const url = error.config?.url ?? ''
+      // Don't redirect on the session-check endpoint — AuthContext handles that gracefully
+      const isSessionCheck = url.includes('/auth/me') || url.includes('/auth/login')
+      if (!isSessionCheck) {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }
