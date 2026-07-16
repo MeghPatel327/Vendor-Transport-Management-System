@@ -1,27 +1,32 @@
 # Implementation Plan
 
 Phase 1
-- Project setup
-- Authentication
-- Database
+- [x] Project setup
 
 Phase 2
-- Vendor module
+- [x] Authentication
 
 Phase 3
-- Orders
+- [x] Dashboard Layout
 
 Phase 4
-- Transport
+- [x] Vendor module
 
 Phase 5
-- Hissab
+- [x] Orders
 
 Phase 6
-- Reports
+- [x] Transport
 
 Phase 7
-- Testing
+- [x] Hissab
 
 Phase 8
-- Production deployment
+- [x] Reports
+
+Phase 9
+- [x] Settings
+
+Phase 10
+- [ ] Testing
+- [ ] Production deployment

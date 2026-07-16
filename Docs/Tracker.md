@@ -1,18 +1,19 @@
 # Project Tracker
 
 ## Setup
-- [ ] Initialize project
-- [ ] Configure Baserow
-- [ ] Configure Vercel
+- [x] Initialize project
+- [x] Configure Baserow
+- [x] Configure Vercel
 
 ## Features
-- [ ] Authentication
-- [ ] Vendors
-- [ ] Orders
-- [ ] Transport
-- [ ] Dispatch
-- [ ] Hissab
-- [ ] Reports
+- [x] Authentication
+- [x] Vendors
+- [x] Orders
+- [x] Transport
+- [x] Dispatch
+- [x] Hissab
+- [x] Reports
+- [x] Settings
 
 ## QA
 - [ ] Unit Tests
