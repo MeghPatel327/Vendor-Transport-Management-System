@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getAuthUser } from '../../lib/jwt'
-import { apiError } from '../../lib/helpers'
+import { getAuthUser } from '../lib/jwt'
+import { apiError } from '../lib/helpers'
 
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Administrator'
 

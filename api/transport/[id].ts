@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { baserowGet, baserowUpdate, baserowDelete, TABLE_IDS } from '../../lib/baserow'
-import { requireAuth, apiResponse, apiError, allowMethods } from '../../lib/helpers'
+import { baserowGet, baserowUpdate, baserowDelete, TABLE_IDS } from '../lib/baserow'
+import { requireAuth, apiResponse, apiError, allowMethods } from '../lib/helpers'
 
 interface BaserowTransport {
   id: number; vendor_id: number; lr_number: string; transport_name: string; city: string;

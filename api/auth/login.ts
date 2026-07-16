@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { signJWT } from '../../lib/jwt'
-import { apiError } from '../../lib/helpers'
+import { signJWT } from '../lib/jwt'
+import { apiError } from '../lib/helpers'
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin'
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme'
