@@ -14,7 +14,7 @@ function mapTransport(row: BaserowTransport) {
     transport_name: row.transport_name, city: row.city, item: row.item,
     quantity: Number(row.quantity), dispatched_quantity: Number(row.dispatched_quantity),
     remaining_quantity: Number(row.remaining_quantity), rate: Number(row.rate),
-    amount: Number(row.amount), payment_status: row.payment_status, transport_date: row.transport_date,
+    amount: Number(row.amount), payment_status: (row.payment_status as any)?.value || row.payment_status, transport_date: row.transport_date,
   }
 }
 

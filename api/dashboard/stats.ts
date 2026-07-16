@@ -19,9 +19,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const total_vendors = vendors.length
   const total_orders = orders.length
-  const pending_orders = orders.filter(o => o.status === 'Pending').length
+  const pending_orders = orders.filter(o => ((o.status as any)?.value || o.status) === 'Pending').length
   const total_transport = transport.length
-  const pending_payments = transport.filter(t => t.payment_status === 'Pending').length
+  const pending_payments = transport.filter(t => ((t.payment_status as any)?.value || t.payment_status) === 'Pending').length
   const total_dispatched_quantity = transport.reduce((s, t) => s + Number(t.dispatched_quantity), 0)
   const total_hissab_amount = Math.round(
     transport.reduce((s, t) => s + Number(t.dispatched_quantity) * Number(t.rate), 0) * 100

@@ -8,7 +8,7 @@ interface BaserowOrder {
 }
 
 function mapOrder(row: BaserowOrder) {
-  return { id: row.id, vendor_id: row.vendor_id, item: row.item, quantity: Number(row.quantity), rate: Number(row.rate), amount: Number(row.amount), status: row.status, order_date: row.order_date }
+  return { id: row.id, vendor_id: row.vendor_id, item: row.item, quantity: Number(row.quantity), rate: Number(row.rate), amount: Number(row.amount), status: (row.status as any)?.value || row.status, order_date: row.order_date }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

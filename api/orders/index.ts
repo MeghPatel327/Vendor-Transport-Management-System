@@ -25,7 +25,7 @@ function mapOrder(row: BaserowOrder) {
     quantity: Number(row.quantity),
     rate: Number(row.rate),
     amount: Number(row.amount),
-    status: row.status,
+    status: (row.status as any)?.value || row.status,
     order_date: row.order_date,
   }
 }

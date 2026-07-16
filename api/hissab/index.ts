@@ -39,7 +39,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       rate,
       hissab_amount,
       transport_date: t.transport_date,
-      payment_status: t.payment_status,
+      payment_status: (t.payment_status as any)?.value || t.payment_status,
     }
   })
 
