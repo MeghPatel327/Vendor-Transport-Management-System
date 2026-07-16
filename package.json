@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "api": "node dev-server.mjs",
     "vercel-dev": "vercel dev",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "vercel-build": "tsc -b && vite build"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
