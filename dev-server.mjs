@@ -319,14 +319,21 @@ async function transport(req, res, id) {
     if (!id) {
       if (req.method === 'GET') {
         const { search, vendor_id, payment_status, city } = getQuery(req)
-        const params = {}
-        if (search)         params['filter__lr_number__contains']     = search
-        if (vendor_id)      params['filter__vendor_id__equal']        = vendor_id
-        if (payment_status) params['filter__payment_status__equal']   = payment_status
-        if (city)           params['filter__city__equal']             = city
-        const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport, params), brList(TABLE_IDS.vendors)])
+        // Fetch all rows, do all filtering client-side (avoids Baserow single-select quirks)
+        const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport), brList(TABLE_IDS.vendors)])
         const vmap = Object.fromEntries(vend.map(v => [v.id, v.name]))
-        return ok(res, rows.map(t => mapTransport(t, vmap[t.vendor_id])))
+        let mapped = rows.map(t => mapTransport(t, vmap[t.vendor_id]))
+        if (vendor_id)      mapped = mapped.filter(t => String(t.vendor_id) === String(vendor_id))
+        if (payment_status) mapped = mapped.filter(t => t.payment_status === payment_status)
+        if (city)           mapped = mapped.filter(t => (t.city || '').toLowerCase() === city.toLowerCase())
+        if (search) {
+          const q = search.toLowerCase()
+          mapped = mapped.filter(t =>
+            (t.lr_number || '').toLowerCase().includes(q) ||
+            (t.transport_name || '').toLowerCase().includes(q)
+          )
+        }
+        return ok(res, mapped)
       }
       if (req.method === 'POST') {
         const { vendor_id, lr_number, transport_name, city, item, quantity, dispatched_quantity = 0, rate, payment_status = 'Pending', transport_date } = await getBody(req)
@@ -380,17 +387,25 @@ async function transport(req, res, id) {
 async function hissab(req, res) {
   if (!await requireAuth(req, res)) return
   try {
-    const { vendor_id, city } = getQuery(req)
-    const params = {}
-    if (vendor_id) params['filter__vendor_id__equal'] = vendor_id
-    if (city)      params['filter__city__equal']      = city
-    const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport, params), brList(TABLE_IDS.vendors)])
+    const { vendor_id, city, search, payment_status } = getQuery(req)
+    // Fetch all, filter client-side
+    const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport), brList(TABLE_IDS.vendors)])
     const vmap = Object.fromEntries(vend.map(v => [v.id, v.name]))
-    const entries = rows.map(t => {
+    let entries = rows.map(t => {
       const dispatchedQty = Number(t.dispatched_quantity)
       const rate          = Number(t.rate)
-      return { transport_id: t.id, vendor_id: t.vendor_id, vendor_name: vmap[t.vendor_id] ?? '', city: t.city, item: t.item, lr_number: t.lr_number, dispatched_quantity: dispatchedQty, rate, hissab_amount: Math.round(dispatchedQty * rate * 100) / 100, transport_date: t.transport_date, payment_status: t.payment_status?.value ?? t.payment_status }
+      return { transport_id: t.id, vendor_id: t.vendor_id, vendor_name: vmap[t.vendor_id] ?? '', transport_name: t.transport_name ?? '', city: t.city, item: t.item, lr_number: t.lr_number, dispatched_quantity: dispatchedQty, rate, hissab_amount: Math.round(dispatchedQty * rate * 100) / 100, transport_date: t.transport_date, payment_status: t.payment_status?.value ?? t.payment_status }
     })
+    if (vendor_id)      entries = entries.filter(e => String(e.vendor_id) === String(vendor_id))
+    if (city)           entries = entries.filter(e => (e.city || '').toLowerCase() === city.toLowerCase())
+    if (payment_status) entries = entries.filter(e => e.payment_status === payment_status)
+    if (search) {
+      const q = search.toLowerCase()
+      entries = entries.filter(e =>
+        (e.transport_name || '').toLowerCase().includes(q) ||
+        (e.lr_number || '').toLowerCase().includes(q)
+      )
+    }
     ok(res, {
       entries,
       total_hissab_amount:       Math.round(entries.reduce((s, e) => s + e.hissab_amount,       0) * 100) / 100,

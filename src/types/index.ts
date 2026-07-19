@@ -83,6 +83,7 @@ export interface HissabEntry {
   transport_id: number;
   vendor_id: number;
   vendor_name: string;
+  transport_name: string;
   city: string;
   item: string;
   lr_number: string;
@@ -165,4 +166,6 @@ export interface TransportQueryParams extends PaginationParams {
 export interface HissabQueryParams {
   vendor_id?: number;
   city?: string;
+  search?: string; // transport name or LR number search
+  payment_status?: PaymentStatus;
 }
