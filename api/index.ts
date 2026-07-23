@@ -112,8 +112,23 @@ async function requireAuth(req: VercelRequest, res: VercelResponse) {
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
 const mapVendor    = (r: any) => ({ id: r.id, name: r.name, created_at: r.created_on })
-const mapOrder     = (r: any) => ({ id: r.id, vendor_id: r.vendor_id, vendor_name: r.vendor_name ?? '', item: r.item, quantity: Number(r.quantity), rate: Number(r.rate), amount: Number(r.amount), status: r.status?.value ?? r.status, order_date: r.order_date })
-const mapTransport = (r: any, vendorName?: string) => ({ id: r.id, vendor_id: r.vendor_id, vendor_name: vendorName ?? r.vendor_name ?? '', lr_number: r.lr_number, transport_name: r.transport_name, city: r.city, item: r.item, quantity: Number(r.quantity), dispatched_quantity: Number(r.dispatched_quantity), remaining_quantity: Number(r.remaining_quantity), rate: Number(r.rate), amount: Number(r.amount), payment_status: r.payment_status?.value ?? r.payment_status, transport_date: r.transport_date })
+const mapOrder     = (r: any) => ({
+  id: r.id, customer_id: r.customer_id ?? r.vendor_id, customer_name: r.customer_name ?? r.vendor_name ?? '',
+  item: r.item, quantity: Number(r.quantity ?? 1), rate: Number(r.rate ?? 0),
+  amount: Number(r.amount ?? 0), status: r.status?.value ?? r.status ?? 'Received', order_date: r.order_date,
+  is_history: Boolean(r.is_history),
+})
+const mapTransport = (r: any, vendorName?: string) => ({
+  id: r.id, transport_master_id: r.vendor_id,
+  transport_name: r.transport_name || vendorName || r.vendor_name || 'Transport',
+  lr_number: r.lr_number, city: r.city || '', item: r.item,
+  quantity: Number(r.quantity), dispatched_quantity: Number(r.dispatched_quantity ?? r.quantity),
+  remaining_quantity: Number(r.remaining_quantity ?? 0), rate: Number(r.rate),
+  amount: Number(r.amount ?? (Number(r.quantity) * Number(r.rate))),
+  payment_status: (r.payment_status?.value ?? r.payment_status) === 'Paid' ? 'Paid' : 'Pending',
+  transport_date: r.transport_date || r.booking_date,
+  booking_date: r.booking_date || r.transport_date,
+})
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
@@ -150,13 +165,12 @@ async function handleDashboard(req: VercelRequest, res: VercelResponse) {
     brList(TABLE_IDS.vendors), brList(TABLE_IDS.orders), brList(TABLE_IDS.transport)
   ])
   return ok(res, {
-    total_vendors:   vendors.length,
-    total_orders:    orders.length,
-    pending_orders:  orders.filter((o: any) => (o.status?.value ?? o.status) === 'Pending').length,
+    total_customers: vendors.length,
+    total_transports_master: vendors.length,
+    total_orders: orders.length,
     total_transport: transport.length,
-    pending_payments: transport.filter((t: any) => (t.payment_status?.value ?? t.payment_status) === 'Pending').length,
-    total_dispatched_quantity: transport.reduce((s: number, t: any) => s + Number(t.dispatched_quantity), 0),
-    total_hissab_amount: Math.round(transport.reduce((s: number, t: any) => s + Number(t.dispatched_quantity) * Number(t.rate), 0) * 100) / 100,
+    pending_payments: transport.filter((t: any) => (t.payment_status?.value ?? t.payment_status) !== 'Paid').length,
+    total_hissab_amount: Math.round(transport.reduce((s: number, t: any) => s + Number(t.quantity ?? t.dispatched_quantity ?? 0) * Number(t.rate ?? 0), 0) * 100) / 100,
   })
 }
 
@@ -171,16 +185,16 @@ async function handleVendors(req: VercelRequest, res: VercelResponse, id?: strin
     }
     if (req.method === 'POST') {
       const { name } = req.body ?? {}
-      if (!name || typeof name !== 'string' || name.trim().length < 2) return err(res, 'Vendor name must be at least 2 characters', 400)
+      if (!name || typeof name !== 'string' || name.trim().length < 2) return err(res, 'Name must be at least 2 characters', 400)
       return ok(res, mapVendor(await brCreate(TABLE_IDS.vendors, { name: name.trim() })), 201)
     }
   } else {
     const rid = Number(id)
-    if (!rid) return err(res, 'Invalid vendor ID', 400)
+    if (!rid) return err(res, 'Invalid ID', 400)
     if (req.method === 'GET')    return ok(res, mapVendor(await brGet(TABLE_IDS.vendors, rid)))
     if (req.method === 'PUT') {
       const { name } = req.body ?? {}
-      if (!name || name.trim().length < 2) return err(res, 'Vendor name must be at least 2 characters', 400)
+      if (!name || name.trim().length < 2) return err(res, 'Name must be at least 2 characters', 400)
       return ok(res, mapVendor(await brUpdate(TABLE_IDS.vendors, rid, { name: name.trim() })))
     }
     if (req.method === 'DELETE') { await brDelete(TABLE_IDS.vendors, rid); return ok(res, { deleted: true }) }
@@ -192,47 +206,37 @@ async function handleOrders(req: VercelRequest, res: VercelResponse, id?: string
   if (!await requireAuth(req, res)) return
   if (!id) {
     if (req.method === 'GET') {
-      const { search, vendor_id, status } = req.query as Record<string, string>
+      const { search, customer_id, vendor_id, is_history } = req.query as Record<string, string>
       const params: Record<string, string> = {}
-      if (search)    params['filter__item__contains']   = search
-      if (vendor_id) params['filter__vendor_id__equal'] = vendor_id
-      if (status)    params['filter__status__equal']    = status
+      if (search) params['filter__item__contains'] = search
+      const cid = customer_id || vendor_id
+      if (cid) params['filter__vendor_id__equal'] = cid
       const [rows, vend] = await Promise.all([brList(TABLE_IDS.orders, params), brList(TABLE_IDS.vendors)])
       const vmap = Object.fromEntries(vend.map((v: any) => [v.id, v.name]))
-      return ok(res, rows.map((o: any) => ({ ...mapOrder(o), vendor_name: (vmap as any)[o.vendor_id] ?? '' })))
+      let mapped = rows.map((o: any) => ({ ...mapOrder(o), customer_name: (vmap as any)[o.vendor_id] ?? o.customer_name ?? '' }))
+      if (is_history !== undefined) {
+        const histBool = is_history === 'true'
+        mapped = mapped.filter(o => Boolean(o.is_history) === histBool)
+      }
+      return ok(res, mapped)
     }
     if (req.method === 'POST') {
-      const { vendor_id, item, quantity, rate, status = 'Pending', order_date } = req.body ?? {}
-      if (!vendor_id || !item || !quantity || !rate || !order_date) return err(res, 'Missing required fields', 400)
-      if (Number(quantity) <= 0) return err(res, 'Quantity must be positive', 400)
-      if (Number(rate) <= 0)     return err(res, 'Rate must be positive', 400)
-      if (!['Pending', 'Received'].includes(status)) return err(res, 'Invalid status', 400)
-      const amount = Math.round(Number(quantity) * Number(rate) * 100) / 100
-      return ok(res, mapOrder(await brCreate(TABLE_IDS.orders, { vendor_id: Number(vendor_id), item: String(item).trim(), quantity: Number(quantity), rate: Number(rate), amount, status, order_date })), 201)
+      const { customer_id, vendor_id, item, order_date, is_history = false } = req.body ?? {}
+      const cid = customer_id || vendor_id
+      if (!cid || !item || !order_date) return err(res, 'Missing required fields', 400)
+      return ok(res, mapOrder(await brCreate(TABLE_IDS.orders, { vendor_id: Number(cid), item: String(item).trim(), quantity: 1, rate: 1, amount: 1, status: 'Received', order_date, is_history: Boolean(is_history) })), 201)
     }
   } else {
     const rid = Number(id)
     if (!rid) return err(res, 'Invalid order ID', 400)
-    if (req.method === 'GET')    return ok(res, mapOrder(await brGet(TABLE_IDS.orders, rid)))
+    if (req.method === 'GET') return ok(res, mapOrder(await brGet(TABLE_IDS.orders, rid)))
     if (req.method === 'PUT') {
       const body = req.body ?? {}
-      const { vendor_id, item, quantity, rate, status, order_date } = body
-      if (quantity !== undefined && Number(quantity) <= 0) return err(res, 'Quantity must be positive', 400)
-      if (rate     !== undefined && Number(rate)     <= 0) return err(res, 'Rate must be positive', 400)
-      if (status && !['Pending', 'Received'].includes(status)) return err(res, 'Invalid status', 400)
       const updates: Record<string, unknown> = {}
-      if (vendor_id  !== undefined) updates.vendor_id  = Number(vendor_id)
-      if (item       !== undefined) updates.item        = String(item).trim()
-      if (quantity   !== undefined) updates.quantity    = Number(quantity)
-      if (rate       !== undefined) updates.rate        = Number(rate)
-      if (quantity !== undefined || rate !== undefined) {
-        const ex = await brGet(TABLE_IDS.orders, rid)
-        const q  = quantity !== undefined ? Number(quantity) : Number(ex.quantity)
-        const r  = rate     !== undefined ? Number(rate)     : Number(ex.rate)
-        updates.amount = Math.round(q * r * 100) / 100
-      }
-      if (status     !== undefined) updates.status     = status
-      if (order_date !== undefined) updates.order_date = order_date
+      if (body.customer_id !== undefined || body.vendor_id !== undefined) updates.vendor_id = Number(body.customer_id || body.vendor_id)
+      if (body.item !== undefined) updates.item = String(body.item).trim()
+      if (body.order_date !== undefined) updates.order_date = body.order_date
+      if (body.is_history !== undefined) updates.is_history = Boolean(body.is_history)
       return ok(res, mapOrder(await brUpdate(TABLE_IDS.orders, rid, updates)))
     }
     if (req.method === 'DELETE') { await brDelete(TABLE_IDS.orders, rid); return ok(res, { deleted: true }) }
@@ -244,52 +248,44 @@ async function handleTransport(req: VercelRequest, res: VercelResponse, id?: str
   if (!await requireAuth(req, res)) return
   if (!id) {
     if (req.method === 'GET') {
-      const { search, vendor_id, payment_status, city } = req.query as Record<string, string>
+      const { search, transport_name, payment_status } = req.query as Record<string, string>
       const params: Record<string, string> = {}
-      if (search)         params['filter__lr_number__contains']   = search
-      if (vendor_id)      params['filter__vendor_id__equal']      = vendor_id
+      if (search) params['filter__lr_number__contains'] = search
       if (payment_status) params['filter__payment_status__equal'] = payment_status
-      if (city)           params['filter__city__equal']           = city
       const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport, params), brList(TABLE_IDS.vendors)])
       const vmap = Object.fromEntries(vend.map((v: any) => [v.id, v.name]))
-      return ok(res, rows.map((t: any) => mapTransport(t, (vmap as any)[t.vendor_id])))
+      let mapped = rows.map((t: any) => mapTransport(t, (vmap as any)[t.vendor_id]))
+      if (transport_name) mapped = mapped.filter(t => (t.transport_name || '').toLowerCase().includes(transport_name.toLowerCase()))
+      return ok(res, mapped)
     }
     if (req.method === 'POST') {
-      const { vendor_id, lr_number, transport_name, city, item, quantity, dispatched_quantity = 0, rate, payment_status = 'Pending', transport_date } = req.body ?? {}
-      if (!vendor_id || !lr_number || !transport_name || !city || !item || !quantity || !rate || !transport_date) return err(res, 'Missing required fields', 400)
-      const qty = Number(quantity), disp = Number(dispatched_quantity), r = Number(rate)
-      if (qty <= 0)       return err(res, 'Quantity must be positive', 400)
-      if (r <= 0)         return err(res, 'Rate must be positive', 400)
-      if (disp < 0)       return err(res, 'Dispatched cannot be negative', 400)
-      if (disp > qty)     return err(res, 'Dispatched cannot exceed quantity', 400)
-      if (!['Pending', 'Paid', 'Partial'].includes(payment_status)) return err(res, 'Invalid payment_status', 400)
-      return ok(res, mapTransport(await brCreate(TABLE_IDS.transport, { vendor_id: Number(vendor_id), lr_number: String(lr_number).trim(), transport_name: String(transport_name).trim(), city: String(city).trim(), item: String(item).trim(), quantity: qty, dispatched_quantity: disp, remaining_quantity: Math.max(0, qty - disp), rate: r, amount: Math.round(qty * r * 100) / 100, payment_status, transport_date })), 201)
+      const { transport_name, lr_number, item, quantity, rate, payment_status = 'Pending', booking_date, transport_date, vendor_id } = req.body ?? {}
+      const dt = booking_date || transport_date
+      const tName = transport_name || 'Transport'
+      if (!lr_number || !tName || !item || !quantity || !rate || !dt) return err(res, 'Missing required fields', 400)
+      const qty = Number(quantity), r = Number(rate)
+      if (qty <= 0) return err(res, 'Quantity must be positive', 400)
+      if (r <= 0)   return err(res, 'Rate must be positive', 400)
+      const status = payment_status === 'Paid' ? 'Paid' : 'Pending'
+      return ok(res, mapTransport(await brCreate(TABLE_IDS.transport, { vendor_id: Number(vendor_id || 1), lr_number: String(lr_number).trim(), transport_name: String(tName).trim(), city: '', item: String(item).trim(), quantity: qty, dispatched_quantity: qty, remaining_quantity: 0, rate: r, amount: Math.round(qty * r * 100) / 100, payment_status: status, transport_date: dt })), 201)
     }
   } else {
     const rid = Number(id)
     if (!rid) return err(res, 'Invalid transport ID', 400)
-    if (req.method === 'GET')    return ok(res, mapTransport(await brGet(TABLE_IDS.transport, rid)))
+    if (req.method === 'GET') return ok(res, mapTransport(await brGet(TABLE_IDS.transport, rid)))
     if (req.method === 'PUT') {
       const body = req.body ?? {}
       const ex   = await brGet(TABLE_IDS.transport, rid)
-      const qty  = body.quantity            !== undefined ? Number(body.quantity)            : Number(ex.quantity)
-      const disp = body.dispatched_quantity !== undefined ? Number(body.dispatched_quantity) : Number(ex.dispatched_quantity)
-      const r    = body.rate                !== undefined ? Number(body.rate)                : Number(ex.rate)
-      if (qty <= 0)   return err(res, 'Quantity must be positive', 400)
-      if (r <= 0)     return err(res, 'Rate must be positive', 400)
-      if (disp < 0)   return err(res, 'Dispatched cannot be negative', 400)
-      if (disp > qty) return err(res, 'Dispatched cannot exceed quantity', 400)
-      const updates: Record<string, unknown> = { quantity: qty, dispatched_quantity: disp, remaining_quantity: Math.max(0, qty - disp), rate: r, amount: Math.round(qty * r * 100) / 100 }
-      if (body.vendor_id       !== undefined) updates.vendor_id       = Number(body.vendor_id)
-      if (body.lr_number       !== undefined) updates.lr_number       = String(body.lr_number).trim()
-      if (body.transport_name  !== undefined) updates.transport_name  = String(body.transport_name).trim()
-      if (body.city            !== undefined) updates.city            = String(body.city).trim()
-      if (body.item            !== undefined) updates.item            = String(body.item).trim()
-      if (body.transport_date  !== undefined) updates.transport_date  = body.transport_date
-      if (body.payment_status  !== undefined) {
-        if (!['Pending', 'Paid', 'Partial'].includes(body.payment_status)) return err(res, 'Invalid payment_status', 400)
-        updates.payment_status = body.payment_status
-      }
+      const qty  = body.quantity !== undefined ? Number(body.quantity) : Number(ex.quantity)
+      const r    = body.rate     !== undefined ? Number(body.rate)     : Number(ex.rate)
+      if (qty <= 0) return err(res, 'Quantity must be positive', 400)
+      if (r <= 0)   return err(res, 'Rate must be positive', 400)
+      const updates: Record<string, unknown> = { quantity: qty, dispatched_quantity: qty, remaining_quantity: 0, rate: r, amount: Math.round(qty * r * 100) / 100 }
+      if (body.lr_number !== undefined) updates.lr_number = String(body.lr_number).trim()
+      if (body.transport_name !== undefined) updates.transport_name = String(body.transport_name).trim()
+      if (body.item !== undefined) updates.item = String(body.item).trim()
+      if (body.booking_date !== undefined || body.transport_date !== undefined) updates.transport_date = body.booking_date || body.transport_date
+      if (body.payment_status !== undefined) updates.payment_status = body.payment_status === 'Paid' ? 'Paid' : 'Pending'
       return ok(res, mapTransport(await brUpdate(TABLE_IDS.transport, rid, updates)))
     }
     if (req.method === 'DELETE') { await brDelete(TABLE_IDS.transport, rid); return ok(res, { deleted: true }) }
@@ -299,18 +295,32 @@ async function handleTransport(req: VercelRequest, res: VercelResponse, id?: str
 
 async function handleHissab(req: VercelRequest, res: VercelResponse) {
   if (!await requireAuth(req, res)) return
-  const { vendor_id, city } = req.query as Record<string, string>
-  const params: Record<string, string> = {}
-  if (vendor_id) params['filter__vendor_id__equal'] = vendor_id
-  if (city)      params['filter__city__equal']      = city
-  const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport, params), brList(TABLE_IDS.vendors)])
+  const { search, payment_status, transport_name } = req.query as Record<string, string>
+  const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport), brList(TABLE_IDS.vendors)])
   const vmap = Object.fromEntries(vend.map((v: any) => [v.id, v.name]))
-  const entries = rows.map((t: any) => {
-    const dq = Number(t.dispatched_quantity), r = Number(t.rate)
-    return { transport_id: t.id, vendor_id: t.vendor_id, vendor_name: (vmap as any)[t.vendor_id] ?? '', city: t.city, item: t.item, lr_number: t.lr_number, dispatched_quantity: dq, rate: r, hissab_amount: Math.round(dq * r * 100) / 100, transport_date: t.transport_date, payment_status: t.payment_status?.value ?? t.payment_status }
+  let entries = rows.map((t: any) => {
+    const qty = Number(t.quantity ?? t.dispatched_quantity ?? 0), r = Number(t.rate ?? 0)
+    return {
+      transport_id: t.id,
+      transport_name: t.transport_name || (vmap as any)[t.vendor_id] || 'Transport',
+      item: t.item,
+      lr_number: t.lr_number,
+      quantity: qty,
+      rate: r,
+      amount: Math.round(qty * r * 100) / 100,
+      booking_date: t.transport_date || t.booking_date,
+      payment_status: (t.payment_status?.value ?? t.payment_status) === 'Paid' ? 'Paid' : 'Pending',
+    }
   })
-  return ok(res, { entries, total_hissab_amount: Math.round(entries.reduce((s: number, e: any) => s + e.hissab_amount, 0) * 100) / 100, total_dispatched_quantity: entries.reduce((s: number, e: any) => s + e.dispatched_quantity, 0) })
+  if (payment_status) entries = entries.filter((e: any) => e.payment_status === payment_status)
+  if (transport_name) entries = entries.filter((e: any) => e.transport_name.toLowerCase().includes(transport_name.toLowerCase()))
+  if (search) {
+    const q = search.toLowerCase()
+    entries = entries.filter((e: any) => (e.transport_name || '').toLowerCase().includes(q) || (e.lr_number || '').toLowerCase().includes(q))
+  }
+  return ok(res, { entries, total_hissab_amount: Math.round(entries.reduce((s: number, e: any) => s + e.amount, 0) * 100) / 100, total_quantity: entries.reduce((s: number, e: any) => s + e.quantity, 0) })
 }
+
 
 // ─── Main router ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {

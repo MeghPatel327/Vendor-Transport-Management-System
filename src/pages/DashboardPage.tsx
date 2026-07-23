@@ -5,7 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency, formatNumber } from '@/lib/utils'
 import {
   Users, ShoppingCart, Truck, Calculator,
-  TrendingUp, Clock, CheckCircle2, AlertCircle
+  AlertCircle
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 
@@ -60,18 +60,18 @@ export default function DashboardPage() {
           {greeting}, {user?.name ?? 'Admin'} 👋
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Here's what's happening with your transport operations today.
+          Here's what's happening with your transport and order operations today.
         </p>
       </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          title="Total Vendors"
-          value={isLoading ? '—' : formatNumber(stats?.total_vendors ?? 0)}
+          title="Master Directory"
+          value={isLoading ? '—' : formatNumber((stats as any)?.total_customers ?? (stats as any)?.total_vendors ?? 0)}
           icon={Users}
           color="bg-blue-500"
-          subtitle="Registered vendors"
+          subtitle="Customers & Transports"
           isLoading={isLoading}
         />
         <StatCard
@@ -79,7 +79,7 @@ export default function DashboardPage() {
           value={isLoading ? '—' : formatNumber(stats?.total_orders ?? 0)}
           icon={ShoppingCart}
           color="bg-violet-500"
-          subtitle={`${stats?.pending_orders ?? 0} pending`}
+          subtitle="Active & History orders"
           isLoading={isLoading}
         />
         <StatCard
@@ -95,57 +95,9 @@ export default function DashboardPage() {
           value={isLoading ? '—' : formatCurrency(stats?.total_hissab_amount ?? 0)}
           icon={Calculator}
           color="bg-emerald-500"
-          subtitle="Dispatched × Rate"
+          subtitle="Quantity × Rate"
           isLoading={isLoading}
         />
-      </div>
-
-      {/* Secondary stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="border-0 shadow-sm">
-          <CardContent className="flex items-center gap-4 p-6">
-            <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
-              <TrendingUp className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Total Dispatched</p>
-              <p className="text-xl font-bold">
-                {isLoading ? <Skeleton className="h-6 w-20 inline-block" /> : formatNumber(stats?.total_dispatched_quantity ?? 0)}
-              </p>
-              <p className="text-xs text-muted-foreground">units dispatched</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-0 shadow-sm">
-          <CardContent className="flex items-center gap-4 p-6">
-            <div className="p-3 rounded-xl bg-amber-50 text-amber-600">
-              <Clock className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Pending Orders</p>
-              <p className="text-xl font-bold">
-                {isLoading ? <Skeleton className="h-6 w-20 inline-block" /> : formatNumber(stats?.pending_orders ?? 0)}
-              </p>
-              <p className="text-xs text-muted-foreground">awaiting receipt</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-0 shadow-sm">
-          <CardContent className="flex items-center gap-4 p-6">
-            <div className="p-3 rounded-xl bg-rose-50 text-rose-600">
-              <AlertCircle className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Pending Payments</p>
-              <p className="text-xl font-bold">
-                {isLoading ? <Skeleton className="h-6 w-20 inline-block" /> : formatNumber(stats?.pending_payments ?? 0)}
-              </p>
-              <p className="text-xs text-muted-foreground">transport entries</p>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Quick Actions */}
@@ -153,7 +105,7 @@ export default function DashboardPage() {
         <h2 className="text-lg font-semibold mb-3">Quick Actions</h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Add Vendor', icon: Users, to: '/vendors', color: 'blue' },
+            { label: 'Master Directory', icon: Users, to: '/vendors', color: 'blue' },
             { label: 'New Order', icon: ShoppingCart, to: '/orders', color: 'violet' },
             { label: 'Add Transport', icon: Truck, to: '/transport', color: 'amber' },
             { label: 'View Hissab', icon: Calculator, to: '/hissab', color: 'emerald' },

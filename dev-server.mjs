@@ -166,17 +166,21 @@ async function requireAuth(req, res) {
 // ─── Mappers (match production handlers exactly) ──────────────────────────────
 const mapVendor   = r => ({ id: r.id, name: r.name, created_at: r.created_on })
 const mapOrder    = r => ({
-  id: r.id, vendor_id: r.vendor_id, vendor_name: r.vendor_name ?? '',
-  item: r.item, quantity: Number(r.quantity), rate: Number(r.rate),
-  amount: Number(r.amount), status: r.status?.value ?? r.status, order_date: r.order_date,
+  id: r.id, customer_id: r.customer_id ?? r.vendor_id, customer_name: r.customer_name ?? r.vendor_name ?? '',
+  item: r.item, quantity: Number(r.quantity ?? 1), rate: Number(r.rate ?? 0),
+  amount: Number(r.amount ?? 0), status: r.status?.value ?? r.status ?? 'Received', order_date: r.order_date,
+  is_history: Boolean(r.is_history),
 })
 const mapTransport = (r, vendorName) => ({
-  id: r.id, vendor_id: r.vendor_id, vendor_name: vendorName ?? r.vendor_name ?? '',
-  lr_number: r.lr_number, transport_name: r.transport_name, city: r.city, item: r.item,
-  quantity: Number(r.quantity), dispatched_quantity: Number(r.dispatched_quantity),
-  remaining_quantity: Number(r.remaining_quantity), rate: Number(r.rate),
-  amount: Number(r.amount), payment_status: r.payment_status?.value ?? r.payment_status,
-  transport_date: r.transport_date,
+  id: r.id, transport_master_id: r.vendor_id,
+  transport_name: r.transport_name || vendorName || r.vendor_name || 'Transport',
+  lr_number: r.lr_number, city: r.city || '', item: r.item,
+  quantity: Number(r.quantity), dispatched_quantity: Number(r.dispatched_quantity ?? r.quantity),
+  remaining_quantity: Number(r.remaining_quantity ?? 0), rate: Number(r.rate),
+  amount: Number(r.amount ?? (Number(r.quantity) * Number(r.rate))),
+  payment_status: (r.payment_status?.value ?? r.payment_status) === 'Paid' ? 'Paid' : 'Pending',
+  transport_date: r.transport_date || r.booking_date,
+  booking_date: r.booking_date || r.transport_date,
 })
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
@@ -212,18 +216,17 @@ async function dashboardStats(req, res) {
       brList(TABLE_IDS.vendors), brList(TABLE_IDS.orders), brList(TABLE_IDS.transport)
     ])
     ok(res, {
-      total_vendors:   vendors.length,
-      total_orders:    orders.length,
-      pending_orders:  orders.filter(o => (o.status?.value ?? o.status) === 'Pending').length,
+      total_customers: vendors.length,
+      total_transports_master: vendors.length,
+      total_orders: orders.length,
       total_transport: transport.length,
-      pending_payments: transport.filter(t => (t.payment_status?.value ?? t.payment_status) === 'Pending').length,
-      total_dispatched_quantity: transport.reduce((s, t) => s + Number(t.dispatched_quantity), 0),
-      total_hissab_amount: Math.round(transport.reduce((s, t) => s + Number(t.dispatched_quantity) * Number(t.rate), 0) * 100) / 100,
+      pending_payments: transport.filter(t => (t.payment_status?.value ?? t.payment_status) !== 'Paid').length,
+      total_hissab_amount: Math.round(transport.reduce((s, t) => s + Number(t.quantity ?? t.dispatched_quantity ?? 0) * Number(t.rate ?? 0), 0) * 100) / 100,
     })
   } catch (e) { err(res, e.message, 500) }
 }
 
-// Vendors
+// Vendors / Master Data
 async function vendors(req, res, id) {
   if (!await requireAuth(req, res)) return
   try {
@@ -237,16 +240,16 @@ async function vendors(req, res, id) {
       if (req.method === 'POST') {
         const { name } = await getBody(req)
         if (!name || typeof name !== 'string' || name.trim().length < 2)
-          return err(res, 'Vendor name must be at least 2 characters', 400)
+          return err(res, 'Name must be at least 2 characters', 400)
         return ok(res, mapVendor(await brCreate(TABLE_IDS.vendors, { name: name.trim() })), 201)
       }
     } else {
       const rid = Number(id)
-      if (!rid) return err(res, 'Invalid vendor ID', 400)
+      if (!rid) return err(res, 'Invalid ID', 400)
       if (req.method === 'GET')    return ok(res, mapVendor(await brGet(TABLE_IDS.vendors, rid)))
       if (req.method === 'PUT') {
         const { name } = await getBody(req)
-        if (!name || name.trim().length < 2) return err(res, 'Vendor name must be at least 2 characters', 400)
+        if (!name || name.trim().length < 2) return err(res, 'Name must be at least 2 characters', 400)
         return ok(res, mapVendor(await brUpdate(TABLE_IDS.vendors, rid, { name: name.trim() })))
       }
       if (req.method === 'DELETE') { await brDelete(TABLE_IDS.vendors, rid); return ok(res, { deleted: true }) }
@@ -261,49 +264,41 @@ async function orders(req, res, id) {
   try {
     if (!id) {
       if (req.method === 'GET') {
-        const { search, vendor_id, status } = getQuery(req)
+        const { search, customer_id, vendor_id, is_history } = getQuery(req)
         const params = {}
-        if (search)    params['filter__item__contains']    = search
-        if (vendor_id) params['filter__vendor_id__equal']  = vendor_id
-        if (status)    params['filter__status__equal']     = status
+        if (search) params['filter__item__contains'] = search
+        const cid = customer_id || vendor_id
+        if (cid) params['filter__vendor_id__equal'] = cid
         const [rows, vend] = await Promise.all([brList(TABLE_IDS.orders, params), brList(TABLE_IDS.vendors)])
         const vmap = Object.fromEntries(vend.map(v => [v.id, v.name]))
-        return ok(res, rows.map(o => ({ ...mapOrder(o), vendor_name: vmap[o.vendor_id] ?? '' })))
+        let mapped = rows.map(o => ({ ...mapOrder(o), customer_name: vmap[o.vendor_id] ?? o.customer_name ?? '' }))
+        if (is_history !== undefined) {
+          const histBool = is_history === 'true'
+          mapped = mapped.filter(o => Boolean(o.is_history) === histBool)
+        }
+        return ok(res, mapped)
       }
       if (req.method === 'POST') {
-        const { vendor_id, item, quantity, rate, status = 'Pending', order_date } = await getBody(req)
-        if (!vendor_id || !item || !quantity || !rate || !order_date)
-          return err(res, 'Missing required fields: vendor_id, item, quantity, rate, order_date', 400)
-        if (Number(quantity) <= 0) return err(res, 'Quantity must be positive', 400)
-        if (Number(rate)     <= 0) return err(res, 'Rate must be positive', 400)
-        if (!['Pending', 'Received'].includes(status)) return err(res, 'Invalid status', 400)
-        const amount = Math.round(Number(quantity) * Number(rate) * 100) / 100
-        const row = await brCreate(TABLE_IDS.orders, { vendor_id: Number(vendor_id), item: String(item).trim(), quantity: Number(quantity), rate: Number(rate), amount, status, order_date })
+        const { customer_id, vendor_id, item, order_date, is_history = false } = await getBody(req)
+        const cid = customer_id || vendor_id
+        if (!cid || !item || !order_date)
+          return err(res, 'Missing required fields: customer_id, item, order_date', 400)
+        const row = await brCreate(TABLE_IDS.orders, {
+          vendor_id: Number(cid), item: String(item).trim(), quantity: 1, rate: 1, amount: 1, status: 'Received', order_date, is_history: Boolean(is_history)
+        })
         return ok(res, mapOrder(row), 201)
       }
     } else {
       const rid = Number(id)
       if (!rid) return err(res, 'Invalid order ID', 400)
-      if (req.method === 'GET')    return ok(res, mapOrder(await brGet(TABLE_IDS.orders, rid)))
+      if (req.method === 'GET') return ok(res, mapOrder(await brGet(TABLE_IDS.orders, rid)))
       if (req.method === 'PUT') {
         const body = await getBody(req)
-        const { vendor_id, item, quantity, rate, status, order_date } = body
-        if (quantity !== undefined && Number(quantity) <= 0) return err(res, 'Quantity must be positive', 400)
-        if (rate     !== undefined && Number(rate)     <= 0) return err(res, 'Rate must be positive', 400)
-        if (status && !['Pending', 'Received'].includes(status)) return err(res, 'Invalid status', 400)
         const updates = {}
-        if (vendor_id   !== undefined) updates.vendor_id  = Number(vendor_id)
-        if (item        !== undefined) updates.item        = String(item).trim()
-        if (quantity    !== undefined) updates.quantity    = Number(quantity)
-        if (rate        !== undefined) updates.rate        = Number(rate)
-        if (quantity !== undefined || rate !== undefined) {
-          const ex = await brGet(TABLE_IDS.orders, rid)
-          const q  = quantity !== undefined ? Number(quantity) : Number(ex.quantity)
-          const r  = rate     !== undefined ? Number(rate)     : Number(ex.rate)
-          updates.amount = Math.round(q * r * 100) / 100
-        }
-        if (status     !== undefined) updates.status     = status
-        if (order_date !== undefined) updates.order_date = order_date
+        if (body.customer_id !== undefined || body.vendor_id !== undefined) updates.vendor_id = Number(body.customer_id || body.vendor_id)
+        if (body.item !== undefined) updates.item = String(body.item).trim()
+        if (body.order_date !== undefined) updates.order_date = body.order_date
+        if (body.is_history !== undefined) updates.is_history = Boolean(body.is_history)
         return ok(res, mapOrder(await brUpdate(TABLE_IDS.orders, rid, updates)))
       }
       if (req.method === 'DELETE') { await brDelete(TABLE_IDS.orders, rid); return ok(res, { deleted: true }) }
@@ -318,14 +313,12 @@ async function transport(req, res, id) {
   try {
     if (!id) {
       if (req.method === 'GET') {
-        const { search, vendor_id, payment_status, city } = getQuery(req)
-        // Fetch all rows, do all filtering client-side (avoids Baserow single-select quirks)
+        const { search, transport_name, payment_status } = getQuery(req)
         const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport), brList(TABLE_IDS.vendors)])
         const vmap = Object.fromEntries(vend.map(v => [v.id, v.name]))
         let mapped = rows.map(t => mapTransport(t, vmap[t.vendor_id]))
-        if (vendor_id)      mapped = mapped.filter(t => String(t.vendor_id) === String(vendor_id))
+        if (transport_name) mapped = mapped.filter(t => (t.transport_name || '').toLowerCase().includes(transport_name.toLowerCase()))
         if (payment_status) mapped = mapped.filter(t => t.payment_status === payment_status)
-        if (city)           mapped = mapped.filter(t => (t.city || '').toLowerCase() === city.toLowerCase())
         if (search) {
           const q = search.toLowerCase()
           mapped = mapped.filter(t =>
@@ -336,45 +329,36 @@ async function transport(req, res, id) {
         return ok(res, mapped)
       }
       if (req.method === 'POST') {
-        const { vendor_id, lr_number, transport_name, city, item, quantity, dispatched_quantity = 0, rate, payment_status = 'Pending', transport_date } = await getBody(req)
-        if (!vendor_id || !lr_number || !transport_name || !city || !item || !quantity || !rate || !transport_date)
+        const { transport_name, lr_number, item, quantity, rate, payment_status = 'Pending', booking_date, transport_date, vendor_id } = await getBody(req)
+        const dt = booking_date || transport_date
+        const tName = transport_name || 'Transport'
+        if (!lr_number || !tName || !item || !quantity || !rate || !dt)
           return err(res, 'Missing required fields', 400)
-        const qty = Number(quantity), dispatched = Number(dispatched_quantity), r = Number(rate)
-        if (qty <= 0)            return err(res, 'Quantity must be positive', 400)
-        if (r <= 0)              return err(res, 'Rate must be positive', 400)
-        if (dispatched < 0)      return err(res, 'Dispatched quantity cannot be negative', 400)
-        if (dispatched > qty)    return err(res, 'Dispatched quantity cannot exceed total quantity', 400)
-        if (!['Pending', 'Paid', 'Partial'].includes(payment_status)) return err(res, 'Invalid payment_status', 400)
-        const remaining = Math.max(0, qty - dispatched)
-        const amount    = Math.round(qty * r * 100) / 100
-        const row = await brCreate(TABLE_IDS.transport, { vendor_id: Number(vendor_id), lr_number: String(lr_number).trim(), transport_name: String(transport_name).trim(), city: String(city).trim(), item: String(item).trim(), quantity: qty, dispatched_quantity: dispatched, remaining_quantity: remaining, rate: r, amount, payment_status, transport_date })
+        const qty = Number(quantity), r = Number(rate)
+        if (qty <= 0) return err(res, 'Quantity must be positive', 400)
+        if (r <= 0)   return err(res, 'Rate must be positive', 400)
+        const status = payment_status === 'Paid' ? 'Paid' : 'Pending'
+        const amount = Math.round(qty * r * 100) / 100
+        const row = await brCreate(TABLE_IDS.transport, {
+          vendor_id: Number(vendor_id || 1), lr_number: String(lr_number).trim(), transport_name: String(tName).trim(), city: '', item: String(item).trim(), quantity: qty, dispatched_quantity: qty, remaining_quantity: 0, rate: r, amount, payment_status: status, transport_date: dt
+        })
         return ok(res, mapTransport(row), 201)
       }
     } else {
       const rid = Number(id)
       if (!rid) return err(res, 'Invalid transport ID', 400)
-      if (req.method === 'GET')    return ok(res, mapTransport(await brGet(TABLE_IDS.transport, rid)))
+      if (req.method === 'GET') return ok(res, mapTransport(await brGet(TABLE_IDS.transport, rid)))
       if (req.method === 'PUT') {
         const body = await getBody(req)
         const ex   = await brGet(TABLE_IDS.transport, rid)
-        const qty        = body.quantity            !== undefined ? Number(body.quantity)            : Number(ex.quantity)
-        const dispatched = body.dispatched_quantity !== undefined ? Number(body.dispatched_quantity) : Number(ex.dispatched_quantity)
-        const rate       = body.rate                !== undefined ? Number(body.rate)                : Number(ex.rate)
-        if (qty <= 0)         return err(res, 'Quantity must be positive', 400)
-        if (rate <= 0)        return err(res, 'Rate must be positive', 400)
-        if (dispatched < 0)   return err(res, 'Dispatched quantity cannot be negative', 400)
-        if (dispatched > qty) return err(res, 'Dispatched quantity cannot exceed total quantity', 400)
-        const updates = { quantity: qty, dispatched_quantity: dispatched, remaining_quantity: Math.max(0, qty - dispatched), rate, amount: Math.round(qty * rate * 100) / 100 }
-        if (body.vendor_id        !== undefined) updates.vendor_id        = Number(body.vendor_id)
-        if (body.lr_number        !== undefined) updates.lr_number        = String(body.lr_number).trim()
-        if (body.transport_name   !== undefined) updates.transport_name   = String(body.transport_name).trim()
-        if (body.city             !== undefined) updates.city             = String(body.city).trim()
-        if (body.item             !== undefined) updates.item             = String(body.item).trim()
-        if (body.transport_date   !== undefined) updates.transport_date   = body.transport_date
-        if (body.payment_status   !== undefined) {
-          if (!['Pending', 'Paid', 'Partial'].includes(body.payment_status)) return err(res, 'Invalid payment_status', 400)
-          updates.payment_status = body.payment_status
-        }
+        const qty  = body.quantity !== undefined ? Number(body.quantity) : Number(ex.quantity)
+        const rate = body.rate !== undefined ? Number(body.rate) : Number(ex.rate)
+        const updates = { quantity: qty, dispatched_quantity: qty, remaining_quantity: 0, rate, amount: Math.round(qty * rate * 100) / 100 }
+        if (body.lr_number !== undefined) updates.lr_number = String(body.lr_number).trim()
+        if (body.transport_name !== undefined) updates.transport_name = String(body.transport_name).trim()
+        if (body.item !== undefined) updates.item = String(body.item).trim()
+        if (body.booking_date !== undefined || body.transport_date !== undefined) updates.transport_date = body.booking_date || body.transport_date
+        if (body.payment_status !== undefined) updates.payment_status = body.payment_status === 'Paid' ? 'Paid' : 'Pending'
         return ok(res, mapTransport(await brUpdate(TABLE_IDS.transport, rid, updates)))
       }
       if (req.method === 'DELETE') { await brDelete(TABLE_IDS.transport, rid); return ok(res, { deleted: true }) }
@@ -387,18 +371,26 @@ async function transport(req, res, id) {
 async function hissab(req, res) {
   if (!await requireAuth(req, res)) return
   try {
-    const { vendor_id, city, search, payment_status } = getQuery(req)
-    // Fetch all, filter client-side
+    const { search, payment_status, transport_name } = getQuery(req)
     const [rows, vend] = await Promise.all([brList(TABLE_IDS.transport), brList(TABLE_IDS.vendors)])
     const vmap = Object.fromEntries(vend.map(v => [v.id, v.name]))
     let entries = rows.map(t => {
-      const dispatchedQty = Number(t.dispatched_quantity)
-      const rate          = Number(t.rate)
-      return { transport_id: t.id, vendor_id: t.vendor_id, vendor_name: vmap[t.vendor_id] ?? '', transport_name: t.transport_name ?? '', city: t.city, item: t.item, lr_number: t.lr_number, dispatched_quantity: dispatchedQty, rate, hissab_amount: Math.round(dispatchedQty * rate * 100) / 100, transport_date: t.transport_date, payment_status: t.payment_status?.value ?? t.payment_status }
+      const qty  = Number(t.quantity ?? t.dispatched_quantity ?? 0)
+      const rate = Number(t.rate ?? 0)
+      return {
+        transport_id: t.id,
+        transport_name: t.transport_name || vmap[t.vendor_id] || 'Transport',
+        item: t.item,
+        lr_number: t.lr_number,
+        quantity: qty,
+        rate,
+        amount: Math.round(qty * rate * 100) / 100,
+        booking_date: t.transport_date || t.booking_date,
+        payment_status: (t.payment_status?.value ?? t.payment_status) === 'Paid' ? 'Paid' : 'Pending',
+      }
     })
-    if (vendor_id)      entries = entries.filter(e => String(e.vendor_id) === String(vendor_id))
-    if (city)           entries = entries.filter(e => (e.city || '').toLowerCase() === city.toLowerCase())
     if (payment_status) entries = entries.filter(e => e.payment_status === payment_status)
+    if (transport_name) entries = entries.filter(e => e.transport_name.toLowerCase().includes(transport_name.toLowerCase()))
     if (search) {
       const q = search.toLowerCase()
       entries = entries.filter(e =>
@@ -408,11 +400,12 @@ async function hissab(req, res) {
     }
     ok(res, {
       entries,
-      total_hissab_amount:       Math.round(entries.reduce((s, e) => s + e.hissab_amount,       0) * 100) / 100,
-      total_dispatched_quantity: entries.reduce((s, e) => s + e.dispatched_quantity, 0),
+      total_hissab_amount: Math.round(entries.reduce((s, e) => s + e.amount, 0) * 100) / 100,
+      total_quantity: entries.reduce((s, e) => s + e.quantity, 0),
     })
   } catch (e) { err(res, e.message, 500) }
 }
+
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {

@@ -1,79 +1,71 @@
 // ============================================================
-// Core Domain Types for Vendor Transport Management System
+// Domain Types for Vendor Transport Management System
 // ============================================================
 
-// --- Vendor ---
+// --- Master Data: Customer & Transport ---
+export interface Customer {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
+export interface TransportMaster {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
+// Legacy Vendor type maintained for backward compatibility
 export interface Vendor {
   id: number;
   name: string;
   created_at: string;
 }
 
-export interface CreateVendorPayload {
-  name: string;
-}
-
-export interface UpdateVendorPayload {
-  name: string;
-}
-
 // --- Order ---
-export type OrderStatus = 'Pending' | 'Received';
-
 export interface Order {
   id: number;
-  vendor_id: number;
-  vendor_name?: string; // joined
+  customer_id: number;
+  customer_name?: string;
   item: string;
-  quantity: number;
-  rate: number;
-  amount: number; // computed: quantity * rate
-  status: OrderStatus;
   order_date: string;
+  is_history?: boolean;
 }
 
 export interface CreateOrderPayload {
-  vendor_id: number;
+  customer_id: number;
   item: string;
-  quantity: number;
-  rate: number;
-  status: OrderStatus;
   order_date: string;
+  is_history?: boolean;
 }
 
 export interface UpdateOrderPayload extends Partial<CreateOrderPayload> {}
 
 // --- Transport ---
-export type PaymentStatus = 'Pending' | 'Paid' | 'Partial';
+export type PaymentStatus = 'Pending' | 'Paid';
 
 export interface Transport {
   id: number;
-  vendor_id: number;
-  vendor_name?: string; // joined
-  lr_number: string;
+  transport_master_id?: number;
   transport_name: string;
-  city: string;
+  lr_number: string;
   item: string;
-  quantity: number;
-  dispatched_quantity: number;
-  remaining_quantity: number; // computed: quantity - dispatched_quantity
+  quantity: number; // Lot / Quantity
+  remaining_quantity?: number;
   rate: number;
   amount: number; // computed: quantity * rate
   payment_status: PaymentStatus;
-  transport_date: string;
+  booking_date: string; // Booking Date (YYYY-MM-DD)
 }
 
 export interface CreateTransportPayload {
-  vendor_id: number;
-  lr_number: string;
   transport_name: string;
-  city: string;
+  lr_number: string;
   item: string;
   quantity: number;
-  dispatched_quantity: number;
   rate: number;
   payment_status: PaymentStatus;
-  transport_date: string;
+  booking_date: string;
 }
 
 export interface UpdateTransportPayload extends Partial<CreateTransportPayload> {}
@@ -81,23 +73,20 @@ export interface UpdateTransportPayload extends Partial<CreateTransportPayload> 
 // --- Hissab (computed from Transport) ---
 export interface HissabEntry {
   transport_id: number;
-  vendor_id: number;
-  vendor_name: string;
   transport_name: string;
-  city: string;
   item: string;
   lr_number: string;
-  dispatched_quantity: number;
+  quantity: number;
   rate: number;
-  hissab_amount: number; // dispatched_quantity * rate
-  transport_date: string;
+  amount: number;
+  booking_date: string;
   payment_status: PaymentStatus;
 }
 
 export interface HissabSummary {
   entries: HissabEntry[];
   total_hissab_amount: number;
-  total_dispatched_quantity: number;
+  total_quantity: number;
 }
 
 // --- Auth ---
@@ -118,12 +107,11 @@ export interface AuthResponse {
 
 // --- Dashboard Stats ---
 export interface DashboardStats {
-  total_vendors: number;
+  total_customers: number;
+  total_transports_master: number;
   total_orders: number;
-  pending_orders: number;
   total_transport: number;
   pending_payments: number;
-  total_dispatched_quantity: number;
   total_hissab_amount: number;
 }
 
@@ -141,31 +129,25 @@ export interface ApiErrorResponse {
 }
 
 // --- Table / Query Params ---
-export interface PaginationParams {
-  page?: number;
-  page_size?: number;
-}
-
-export interface VendorQueryParams extends PaginationParams {
+export interface MasterQueryParams {
   search?: string;
 }
 
-export interface OrderQueryParams extends PaginationParams {
-  vendor_id?: number;
-  status?: OrderStatus;
+export interface OrderQueryParams {
+  customer_id?: number;
   search?: string;
+  is_history?: boolean;
 }
 
-export interface TransportQueryParams extends PaginationParams {
-  vendor_id?: number;
+export interface TransportQueryParams {
+  transport_name?: string;
   payment_status?: PaymentStatus;
-  city?: string;
-  search?: string; // LR number search
+  search?: string; // LR number or transport name search
 }
 
 export interface HissabQueryParams {
-  vendor_id?: number;
-  city?: string;
+  transport_name?: string;
   search?: string; // transport name or LR number search
   payment_status?: PaymentStatus;
 }
+

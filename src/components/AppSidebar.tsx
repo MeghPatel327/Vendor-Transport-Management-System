@@ -21,9 +21,9 @@ import { useToast } from '@/hooks/use-toast'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/vendors', label: 'Vendors', icon: Users },
+  { to: '/vendors', label: 'Master Directory', icon: Users },
   { to: '/orders', label: 'Orders', icon: ShoppingCart },
-  { to: '/transport', label: 'Transport', icon: Truck },
+  { to: '/transport', label: 'Transport Entry', icon: Truck },
   { to: '/hissab', label: 'Hissab', icon: Calculator },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
 ]

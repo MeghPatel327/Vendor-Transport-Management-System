@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useForm, useFieldArray, useWatch } from 'react-hook-form'
+import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { transportService } from '@/services/transport.service'
@@ -18,111 +18,90 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Plus, Search, Pencil, Trash2, Truck, ChevronDown, ChevronRight, Package, Share2, X } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Plus, Search, Pencil, Trash2, Truck, ChevronDown, ChevronRight, Package, Share2, Check, Filter } from 'lucide-react'
 
-// ── Schemas ──────────────────────────────────────────────────────────────────
-const itemSchema = z.object({
-  item: z.string().min(1, 'Item is required'),
-  quantity: z.coerce.number().positive('Must be positive'),
-  dispatched_quantity: z.coerce.number().min(0, 'Cannot be negative'),
-  rate: z.coerce.number().positive('Must be positive'),
-})
+// Pre-defined Item Options with Checkboxes
+const DEFAULT_PRESET_ITEMS = [
+  'Jain 10*14 - 1',
+  'Jain 10*18 - 2',
+  'chibba 19*28 - 2',
+  'clip 8*3 - 1',
+  'BTC 7*4 - 1',
+]
 
 const transportSchema = z.object({
-  vendor_id: z.coerce.number().min(1, 'Select a vendor'),
-  lr_number: z.string().min(1, 'LR number is required'),
   transport_name: z.string().min(1, 'Transport name is required'),
-  city: z.string().min(1, 'City is required'),
-  payment_status: z.enum(['Pending', 'Paid', 'Partial']),
-  transport_date: z.string().min(1, 'Date is required'),
-  items: z.array(itemSchema).min(1, 'At least one item required'),
+  lr_number: z.string().min(1, 'LR number is required'),
+  items: z.array(z.string()).min(1, 'Select at least one item'),
+  quantity: z.coerce.number().positive('Quantity must be positive'),
+  rate: z.coerce.number().positive('Rate must be positive'),
+  payment_status: z.enum(['Pending', 'Paid']),
+  booking_date: z.string().min(1, 'Booking date is required'),
 })
 
 type TransportForm = z.infer<typeof transportSchema>
 
-// ── Per-item live amount preview ──────────────────────────────────────────────
-function ItemAmountPreview({ control, index }: { control: any; index: number }) {
-  const quantity = useWatch({ control, name: `items.${index}.quantity` })
-  const rate = useWatch({ control, name: `items.${index}.rate` })
-  const dispatched = useWatch({ control, name: `items.${index}.dispatched_quantity` })
-  const amount = (Number(quantity) || 0) * (Number(rate) || 0)
-  const hissab = (Number(dispatched) || 0) * (Number(rate) || 0)
-  return (
-    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-      <span>Amount: <strong className="text-foreground">{formatCurrency(amount)}</strong></span>
-      <span>Hissab: <strong className="text-emerald-600">{formatCurrency(hissab)}</strong></span>
-    </div>
-  )
-}
-
-// ── LR Group type ─────────────────────────────────────────────────────────────
+// ── Group by LR ───────────────────────────────────────────────────────────────
 interface LRGroup {
   lr_number: string
   transport_name: string
-  city: string
-  transport_date: string
+  booking_date: string
   payment_status: PaymentStatus
-  vendor_name: string
-  vendor_id: number
   items: Transport[]
   totalItems: number
   totalAmount: number
-  totalDispatched: number
   totalQuantity: number
 }
 
-// ── Share helper ──────────────────────────────────────────────────────────────
 function buildShareText(group: LRGroup): string {
   return [
     `📦 LR No: ${group.lr_number}`,
-    `🚛 Transport: ${group.transport_name}`,
-    `📍 City: ${group.city}`,
-    `👤 Vendor: ${group.vendor_name}`,
-    `📅 Date: ${formatDate(group.transport_date)}`,
+    `🚛 Transport Name: ${group.transport_name}`,
+    `📅 Booking Date: ${formatDate(group.booking_date)}`,
     `Status: ${group.payment_status}`,
     '',
     'Items:',
-    ...group.items.map(t =>
-      `  • ${t.item} — Qty: ${formatNumber(t.quantity)}, Dispatched: ${formatNumber(t.dispatched_quantity)}`
-    ),
+    ...group.items.map(t => `  • ${t.item} — Lot/Qty: ${formatNumber(t.quantity)}`),
     '',
     `Total Items: ${group.totalItems}`,
-    `Total Qty: ${formatNumber(group.totalQuantity)}`,
+    `Total Lot/Qty: ${formatNumber(group.totalQuantity)}`,
   ].join('\n')
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function TransportPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
   const [search, setSearch] = useState('')
-  const [filterVendor, setFilterVendor] = useState('all')
+  const [filterTransport, setFilterTransport] = useState('all')
   const [filterPayment, setFilterPayment] = useState('all')
-  const [filterCity, setFilterCity] = useState('all')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editEntry, setEditEntry] = useState<Transport | null>(null)
   const [deleteEntry, setDeleteEntry] = useState<Transport | null>(null)
   const [expandedLRs, setExpandedLRs] = useState<Set<string>>(new Set())
 
   const { data: transport = [], isLoading } = useQuery({
-    queryKey: ['transport', { search, vendor_id: filterVendor, payment_status: filterPayment, city: filterCity }],
+    queryKey: ['transport', { search, transport_name: filterTransport, payment_status: filterPayment }],
     queryFn: () => transportService.getAll({
       search,
-      vendor_id: filterVendor !== 'all' ? Number(filterVendor) : undefined,
+      transport_name: filterTransport !== 'all' ? filterTransport : undefined,
       payment_status: filterPayment !== 'all' ? filterPayment as PaymentStatus : undefined,
-      city: filterCity !== 'all' ? filterCity : undefined,
     }),
     staleTime: 30_000,
   })
 
   const { data: vendors = [] } = useQuery({ queryKey: ['vendors'], queryFn: () => vendorsService.getAll() })
 
-  const cities = useMemo(() => [...new Set(transport.map(t => t.city).filter(Boolean))], [transport])
-  // Collect unique item names from all transport for the datalist
-  const uniqueItems = useMemo(() => [...new Set(transport.map(t => t.item).filter(Boolean))].sort(), [transport])
+  // Unique transport names for dropdown filtering
+  const transportNames = useMemo(() => {
+    const fromEntries = transport.map(t => t.transport_name).filter(Boolean)
+    const fromVendors = vendors.map(v => v.name)
+    return [...new Set([...fromEntries, ...fromVendors])].sort()
+  }, [transport, vendors])
 
-  // Group by lr_number
+  // Group by LR Number
   const lrGroups = useMemo<LRGroup[]>(() => {
     const map = new Map<string, Transport[]>()
     for (const t of transport) {
@@ -132,17 +111,17 @@ export default function TransportPage() {
     return Array.from(map.entries()).map(([lr_number, items]) => ({
       lr_number,
       transport_name: items[0].transport_name,
-      city: items[0].city,
-      transport_date: items[0].transport_date,
-      payment_status: items[0].payment_status,
-      vendor_name: items[0].vendor_name ?? '',
-      vendor_id: items[0].vendor_id,
+      booking_date: items[0].booking_date || items[0].transport_date,
+      payment_status: items[0].payment_status === 'Paid' ? 'Paid' : 'Pending',
       items,
       totalItems: items.length,
       totalAmount: items.reduce((s, i) => s + i.amount, 0),
-      totalDispatched: items.reduce((s, i) => s + i.dispatched_quantity, 0),
       totalQuantity: items.reduce((s, i) => s + i.quantity, 0),
     }))
+  }, [transport])
+
+  const totalRemainingGoods = useMemo(() => {
+    return transport.reduce((sum, t) => sum + (t.payment_status === 'Pending' ? t.quantity : 0), 0)
   }, [transport])
 
   const toggleLR = (lr: string) => {
@@ -153,51 +132,70 @@ export default function TransportPage() {
     })
   }
 
-  // ── Form ───────────────────────────────────────────────────────────────────
+  // ── Form Setup ─────────────────────────────────────────────────────────────
   const form = useForm<TransportForm>({
     resolver: zodResolver(transportSchema),
     defaultValues: {
+      transport_name: '',
+      lr_number: '',
+      items: [],
+      quantity: 1,
+      rate: 1,
       payment_status: 'Pending',
-      transport_date: todayISO(),
-      items: [{ item: '', quantity: 0, dispatched_quantity: 0, rate: 0 }],
+      booking_date: todayISO(),
     },
   })
-  const { fields, append, remove } = useFieldArray({ control: form.control, name: 'items' })
+
+  const selectedItems = form.watch('items') || []
+
+  const toggleItemCheckbox = (item: string) => {
+    const current = form.getValues('items') || []
+    if (current.includes(item)) {
+      form.setValue('items', current.filter(i => i !== item), { shouldValidate: true })
+    } else {
+      form.setValue('items', [...current, item], { shouldValidate: true })
+    }
+  }
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: transportService.create,
-    onError: () => toast({ title: 'Error', description: 'Failed to create entry.', variant: 'destructive' }),
+    onError: () => toast({ title: 'Error', description: 'Failed to create transport entry.', variant: 'destructive' }),
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: any }) => transportService.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transport'] })
+      queryClient.invalidateQueries({ queryKey: ['hissab'] })
       toast({ title: 'Transport entry updated' } as any)
       setDialogOpen(false); setEditEntry(null); form.reset()
     },
-    onError: () => toast({ title: 'Error', description: 'Failed to update entry.', variant: 'destructive' }),
+    onError: () => toast({ title: 'Error', description: 'Failed to update transport entry.', variant: 'destructive' }),
   })
 
   const deleteMutation = useMutation({
     mutationFn: transportService.delete,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transport'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['hissab'] })
       toast({ title: 'Transport entry deleted' } as any); setDeleteEntry(null)
     },
-    onError: () => toast({ title: 'Error', description: 'Failed to delete entry.', variant: 'destructive' }),
+    onError: () => toast({ title: 'Error', description: 'Failed to delete transport entry.', variant: 'destructive' }),
   })
 
   const isMutating = createMutation.isPending || updateMutation.isPending
 
-  // ── Dialog openers ─────────────────────────────────────────────────────────
   const openAdd = () => {
     setEditEntry(null)
     form.reset({
-      payment_status: 'Pending', transport_date: todayISO(),
-      items: [{ item: '', quantity: 0, dispatched_quantity: 0, rate: 0 }],
+      transport_name: transportNames[0] || '',
+      lr_number: '',
+      items: [DEFAULT_PRESET_ITEMS[0]],
+      quantity: 1,
+      rate: 100,
+      payment_status: 'Pending',
+      booking_date: todayISO(),
     })
     setDialogOpen(true)
   }
@@ -205,9 +203,13 @@ export default function TransportPage() {
   const openEdit = (t: Transport) => {
     setEditEntry(t)
     form.reset({
-      vendor_id: t.vendor_id, lr_number: t.lr_number, transport_name: t.transport_name,
-      city: t.city, payment_status: t.payment_status, transport_date: t.transport_date.split('T')[0],
-      items: [{ item: t.item, quantity: t.quantity, dispatched_quantity: t.dispatched_quantity, rate: t.rate }],
+      transport_name: t.transport_name,
+      lr_number: t.lr_number,
+      items: [t.item],
+      quantity: t.quantity,
+      rate: t.rate,
+      payment_status: t.payment_status === 'Paid' ? 'Paid' : 'Pending',
+      booking_date: (t.booking_date || t.transport_date || todayISO()).split('T')[0],
     })
     setDialogOpen(true)
   }
@@ -218,31 +220,39 @@ export default function TransportPage() {
 
   const onSubmit = async (data: TransportForm) => {
     if (editEntry) {
-      // Edit single item
-      const it = data.items[0]
       updateMutation.mutate({
         id: editEntry.id,
-        data: { vendor_id: data.vendor_id, lr_number: data.lr_number, transport_name: data.transport_name, city: data.city, payment_status: data.payment_status, transport_date: data.transport_date, item: it.item, quantity: it.quantity, dispatched_quantity: it.dispatched_quantity, rate: it.rate },
+        data: {
+          transport_name: data.transport_name,
+          lr_number: data.lr_number,
+          item: data.items[0] || 'Default Item',
+          quantity: data.quantity,
+          rate: data.rate,
+          payment_status: data.payment_status,
+          booking_date: data.booking_date,
+        },
       })
     } else {
-      // Create one entry per item, all under same LR
       try {
-        for (const it of data.items) {
+        for (const item of data.items) {
           await createMutation.mutateAsync({
-            vendor_id: data.vendor_id, lr_number: data.lr_number, transport_name: data.transport_name,
-            city: data.city, payment_status: data.payment_status, transport_date: data.transport_date,
-            item: it.item, quantity: it.quantity, dispatched_quantity: it.dispatched_quantity, rate: it.rate,
+            transport_name: data.transport_name,
+            lr_number: data.lr_number,
+            item,
+            quantity: data.quantity,
+            rate: data.rate,
+            payment_status: data.payment_status,
+            booking_date: data.booking_date,
           })
         }
         queryClient.invalidateQueries({ queryKey: ['transport'] })
-        queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+        queryClient.invalidateQueries({ queryKey: ['hissab'] })
         toast({ title: `${data.items.length} item(s) added under LR ${data.lr_number}` } as any)
         setDialogOpen(false); form.reset()
       } catch { /* handled by mutation onError */ }
     }
   }
 
-  // ── Share ──────────────────────────────────────────────────────────────────
   const handleShare = useCallback((group: LRGroup) => {
     const text = buildShareText(group)
     if (navigator.share) {
@@ -250,7 +260,7 @@ export default function TransportPage() {
     } else {
       navigator.clipboard.writeText(text).catch(() => {})
     }
-    toast({ title: '📋 Copied!', description: 'Transport details copied (no amounts)' } as any)
+    toast({ title: '📋 Copied!', description: 'Transport details copied to clipboard' } as any)
   }, [toast])
 
   return (
@@ -259,28 +269,45 @@ export default function TransportPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Truck className="h-6 w-6 text-primary" /> Transport
+            <Truck className="h-6 w-6 text-primary" /> Transport Entry
           </h1>
-          <p className="text-muted-foreground text-sm mt-1">Manage dispatch &amp; transport entries</p>
+          <p className="text-muted-foreground text-sm mt-1">Record transport bookings, items, and LR details</p>
         </div>
-        <Button onClick={openAdd} id="add-transport-btn"><Plus className="h-4 w-4" /> Add Entry</Button>
+        <Button onClick={openAdd} id="add-transport-btn"><Plus className="h-4 w-4" /> Add Transport Entry</Button>
       </div>
 
-      {/* Summary cards */}
+      {/* Summary Cards including Total Remaining Goods */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: 'Total LR Numbers', value: lrGroups.length },
-          { label: 'Pending Payment', value: transport.filter(t => t.payment_status === 'Pending').length },
-          { label: 'Total Amount', value: formatCurrency(transport.reduce((s, t) => s + t.amount, 0)) },
-          { label: 'Total Dispatched', value: formatNumber(transport.reduce((s, t) => s + t.dispatched_quantity, 0)) },
-        ].map(({ label, value }) => (
-          <Card key={label} className="border-0 shadow-sm">
-            <CardContent className="p-4">
-              <p className="text-xs text-muted-foreground">{label}</p>
-              <p className="text-lg font-bold mt-1">{value}</p>
-            </CardContent>
-          </Card>
-        ))}
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Total LR Entries</p>
+            <p className="text-lg font-bold mt-1">{lrGroups.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Pending Payment LRs</p>
+            <p className="text-lg font-bold mt-1 text-amber-600">
+              {lrGroups.filter(g => g.payment_status === 'Pending').length}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground">Total Lot / Goods</p>
+            <p className="text-lg font-bold mt-1">
+              {formatNumber(transport.reduce((s, t) => s + t.quantity, 0))}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-0 shadow-sm bg-amber-500/10 border-amber-500/20">
+          <CardContent className="p-4">
+            <p className="text-xs text-amber-700 font-medium">Total Remaining Goods</p>
+            <p className="text-lg font-bold mt-1 text-amber-700">
+              {formatNumber(totalRemainingGoods)}
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Filters + Table */}
@@ -289,31 +316,32 @@ export default function TransportPage() {
           <div className="flex flex-wrap gap-3">
             <div className="relative flex-1 min-w-[200px] max-w-sm">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input id="transport-search" placeholder="Search LR or transport name…" value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+              <Input
+                id="transport-search"
+                placeholder="Search LR no or Transport Name…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-9"
+              />
             </div>
-            <Select value={filterVendor} onValueChange={setFilterVendor}>
-              <SelectTrigger className="w-[160px]"><SelectValue placeholder="All vendors" /></SelectTrigger>
+            <Select value={filterTransport} onValueChange={setFilterTransport}>
+              <SelectTrigger className="w-[180px]">
+                <Filter className="h-4 w-4 mr-2 text-muted-foreground" />
+                <SelectValue placeholder="All Transport Names" />
+              </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Vendors</SelectItem>
-                {vendors.map(v => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}
+                <SelectItem value="all">All Transport Names</SelectItem>
+                {transportNames.map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}
               </SelectContent>
             </Select>
-            {cities.length > 0 && (
-              <Select value={filterCity} onValueChange={setFilterCity}>
-                <SelectTrigger className="w-[140px]"><SelectValue placeholder="All cities" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Cities</SelectItem>
-                  {cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
             <Select value={filterPayment} onValueChange={setFilterPayment}>
-              <SelectTrigger className="w-[150px]"><SelectValue placeholder="Payment status" /></SelectTrigger>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Payment status" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Payments</SelectItem>
                 <SelectItem value="Pending">Pending</SelectItem>
                 <SelectItem value="Paid">Paid</SelectItem>
-                <SelectItem value="Partial">Partial</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -336,11 +364,10 @@ export default function TransportPage() {
                     <TableHead className="w-8" />
                     <TableHead>LR No.</TableHead>
                     <TableHead>Transport Name</TableHead>
-                    <TableHead>City</TableHead>
-                    <TableHead className="text-right">Items</TableHead>
-                    <TableHead className="text-right">Total Qty</TableHead>
+                    <TableHead className="text-right">Items Count</TableHead>
+                    <TableHead className="text-right">Total Lot / Qty</TableHead>
                     <TableHead>Payment</TableHead>
-                    <TableHead>Date</TableHead>
+                    <TableHead>Booking Date</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -349,7 +376,6 @@ export default function TransportPage() {
                     const isExpanded = expandedLRs.has(group.lr_number)
                     return (
                       <>
-                        {/* ── LR Group row ── */}
                         <TableRow
                           key={`grp-${group.lr_number}`}
                           className="cursor-pointer hover:bg-muted/50 bg-muted/20 font-medium"
@@ -361,36 +387,28 @@ export default function TransportPage() {
                               : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                           </TableCell>
                           <TableCell className="font-mono text-sm font-semibold text-primary">{group.lr_number}</TableCell>
-                          <TableCell>{group.transport_name}</TableCell>
-                          <TableCell>{group.city}</TableCell>
+                          <TableCell className="font-semibold">{group.transport_name}</TableCell>
                           <TableCell className="text-right">
                             <span className="inline-flex items-center gap-1 text-sm">
                               <Package className="h-3.5 w-3.5 text-muted-foreground" />
                               {group.totalItems} {group.totalItems === 1 ? 'item' : 'items'}
                             </span>
                           </TableCell>
-                          <TableCell className="text-right font-mono">{formatNumber(group.totalQuantity)}</TableCell>
+                          <TableCell className="text-right font-mono font-bold">{formatNumber(group.totalQuantity)}</TableCell>
                           <TableCell onClick={e => e.stopPropagation()}>
-                            {group.payment_status === 'Pending' ? (
-                              <Badge
-                                className={`${PAYMENT_STATUS_COLORS[group.payment_status]} cursor-pointer hover:opacity-70 transition-opacity`}
-                                variant="outline"
-                                title="Click to mark as Paid"
-                                onClick={() => handlePendingClick(group.items[0])}
-                              >
-                                {group.payment_status}
-                              </Badge>
-                            ) : (
-                              <Badge className={PAYMENT_STATUS_COLORS[group.payment_status]} variant="outline">
-                                {group.payment_status}
-                              </Badge>
-                            )}
+                            <Badge
+                              className={`${PAYMENT_STATUS_COLORS[group.payment_status]} cursor-pointer hover:opacity-80`}
+                              variant="outline"
+                              onClick={() => handlePendingClick(group.items[0])}
+                            >
+                              {group.payment_status}
+                            </Badge>
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">{formatDate(group.transport_date)}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm">{formatDate(group.booking_date)}</TableCell>
                           <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                             <Button
                               variant="ghost" size="icon" className="h-8 w-8"
-                              title="Share (without amounts)"
+                              title="Share Entry"
                               onClick={() => handleShare(group)}
                             >
                               <Share2 className="h-3.5 w-3.5" />
@@ -398,7 +416,7 @@ export default function TransportPage() {
                           </TableCell>
                         </TableRow>
 
-                        {/* ── Expanded item rows ── */}
+                        {/* Expanded Items */}
                         {isExpanded && group.items.map(t => (
                           <TableRow key={`itm-${t.id}`} className="bg-background hover:bg-muted/30 border-l-2 border-l-primary/20">
                             <TableCell />
@@ -409,36 +427,15 @@ export default function TransportPage() {
                                 <span className="font-medium text-sm">{t.item}</span>
                               </div>
                             </TableCell>
-                            <TableCell className="text-right">
-                              <div className="text-xs space-y-0.5">
-                                <div className="text-muted-foreground">Qty: <span className="font-mono font-medium">{formatNumber(t.quantity)}</span></div>
-                                <div className="text-emerald-600">Dispatched: <span className="font-mono">{formatNumber(t.dispatched_quantity)}</span></div>
-                                <div className="text-amber-600">Remaining: <span className="font-mono">{formatNumber(t.remaining_quantity)}</span></div>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="text-xs space-y-0.5">
-                                <div className="text-muted-foreground">Rate: <span className="font-mono">{formatCurrency(t.rate)}</span></div>
-                                <div className="font-bold text-sm">{formatCurrency(t.amount)}</div>
-                              </div>
+                            <TableCell className="text-right font-mono font-semibold">
+                              {formatNumber(t.quantity)}
                             </TableCell>
                             <TableCell>
-                              {t.payment_status === 'Pending' ? (
-                                <Badge
-                                  className={`${PAYMENT_STATUS_COLORS[t.payment_status]} cursor-pointer hover:opacity-70 transition-opacity text-xs`}
-                                  variant="outline"
-                                  title="Click to mark as Paid"
-                                  onClick={() => handlePendingClick(t)}
-                                >
-                                  {t.payment_status}
-                                </Badge>
-                              ) : (
-                                <Badge className={`${PAYMENT_STATUS_COLORS[t.payment_status]} text-xs`} variant="outline">
-                                  {t.payment_status}
-                                </Badge>
-                              )}
+                              <Badge className={`${PAYMENT_STATUS_COLORS[t.payment_status]} text-xs`} variant="outline">
+                                {t.payment_status}
+                              </Badge>
                             </TableCell>
-                            <TableCell className="text-muted-foreground text-sm">{formatDate(t.transport_date)}</TableCell>
+                            <TableCell className="text-muted-foreground text-sm">{formatDate(t.booking_date || t.transport_date)}</TableCell>
                             <TableCell className="text-right">
                               <div className="flex items-center justify-end gap-1">
                                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(t)}><Pencil className="h-3.5 w-3.5" /></Button>
@@ -457,155 +454,125 @@ export default function TransportPage() {
         </CardContent>
       </Card>
 
-      {/* ── Add / Edit Dialog ── */}
+      {/* Add / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>{editEntry ? 'Edit Transport Entry' : 'New Transport Entry'}</DialogTitle>
           </DialogHeader>
 
-          {/* Datalist for item name autocomplete */}
-          <datalist id="items-datalist">
-            {uniqueItems.map(name => <option key={name} value={name} />)}
-          </datalist>
-
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-            {/* Header fields */}
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
+              {/* Transport Name */}
               <div className="col-span-2 space-y-2">
-                <Label>Vendor *</Label>
-                <Select value={String(form.watch('vendor_id') || '')} onValueChange={v => form.setValue('vendor_id', Number(v))}>
-                  <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
-                  <SelectContent>{vendors.map(v => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}</SelectContent>
-                </Select>
-                {form.formState.errors.vendor_id && <p className="text-sm text-destructive">{form.formState.errors.vendor_id.message}</p>}
+                <Label htmlFor="t-name">Transport Name *</Label>
+                <Input
+                  id="t-name"
+                  placeholder="e.g. Gati Logistics"
+                  {...form.register('transport_name')}
+                  disabled={isMutating}
+                />
+                {form.formState.errors.transport_name && (
+                  <p className="text-sm text-destructive">{form.formState.errors.transport_name.message}</p>
+                )}
               </div>
+
+              {/* LR Number */}
               <div className="space-y-2">
                 <Label htmlFor="t-lr">LR Number *</Label>
-                <Input id="t-lr" placeholder="e.g. LR-2024-001" {...form.register('lr_number')} disabled={isMutating} />
+                <Input id="t-lr" placeholder="e.g. 5783" {...form.register('lr_number')} disabled={isMutating} />
                 {form.formState.errors.lr_number && <p className="text-sm text-destructive">{form.formState.errors.lr_number.message}</p>}
               </div>
+
+              {/* Booking Date */}
               <div className="space-y-2">
-                <Label htmlFor="t-tname">Transport Name *</Label>
-                <Input id="t-tname" placeholder="e.g. Gati Logistics" {...form.register('transport_name')} disabled={isMutating} />
-                {form.formState.errors.transport_name && <p className="text-sm text-destructive">{form.formState.errors.transport_name.message}</p>}
+                <Label htmlFor="t-date">Booking Date *</Label>
+                <Input id="t-date" type="date" {...form.register('booking_date')} disabled={isMutating} />
+                {form.formState.errors.booking_date && <p className="text-sm text-destructive">{form.formState.errors.booking_date.message}</p>}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="t-city">City *</Label>
-                <Input id="t-city" placeholder="e.g. Mumbai" {...form.register('city')} disabled={isMutating} />
-                {form.formState.errors.city && <p className="text-sm text-destructive">{form.formState.errors.city.message}</p>}
+
+              {/* Item Dropdown with Checkbox */}
+              <div className="col-span-2 space-y-2">
+                <Label>Item Name (Stored in Dropdown with Checkbox) *</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between font-normal">
+                      <span className="truncate">
+                        {selectedItems.length > 0
+                          ? selectedItems.join(', ')
+                          : 'Select Items…'}
+                      </span>
+                      <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[350px] p-2" align="start">
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground px-2 py-1">Select Preset Items:</p>
+                      {DEFAULT_PRESET_ITEMS.map((itemOption) => {
+                        const isChecked = selectedItems.includes(itemOption)
+                        return (
+                          <div
+                            key={itemOption}
+                            className="flex items-center space-x-2 p-2 rounded hover:bg-muted/50 cursor-pointer"
+                            onClick={() => toggleItemCheckbox(itemOption)}
+                          >
+                            <Checkbox checked={isChecked} onCheckedChange={() => toggleItemCheckbox(itemOption)} />
+                            <span className="text-sm">{itemOption}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                {form.formState.errors.items && (
+                  <p className="text-sm text-destructive">{form.formState.errors.items.message}</p>
+                )}
               </div>
+
+              {/* Quantity / Lot */}
               <div className="space-y-2">
+                <Label htmlFor="t-qty">Lot / Quantity *</Label>
+                <Input id="t-qty" type="number" min="1" placeholder="e.g. 5" {...form.register('quantity')} disabled={isMutating} />
+                {form.formState.errors.quantity && <p className="text-sm text-destructive">{form.formState.errors.quantity.message}</p>}
+              </div>
+
+              {/* Rate */}
+              <div className="space-y-2">
+                <Label htmlFor="t-rate">Rate (₹) *</Label>
+                <Input id="t-rate" type="number" min="1" placeholder="500" {...form.register('rate')} disabled={isMutating} />
+                {form.formState.errors.rate && <p className="text-sm text-destructive">{form.formState.errors.rate.message}</p>}
+              </div>
+
+              {/* Payment Status */}
+              <div className="space-y-2 col-span-2">
                 <Label>Payment Status</Label>
                 <Select value={form.watch('payment_status')} onValueChange={v => form.setValue('payment_status', v as PaymentStatus)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Pending">Pending</SelectItem>
+                    <SelectItem value="Pending">Pending (Unpaid)</SelectItem>
                     <SelectItem value="Paid">Paid</SelectItem>
-                    <SelectItem value="Partial">Partial</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="space-y-2 col-span-2 sm:col-span-1">
-                <Label htmlFor="t-date">Transport Date *</Label>
-                <Input id="t-date" type="date" {...form.register('transport_date')} disabled={isMutating} />
-              </div>
-            </div>
-
-            {/* Items section */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label className="text-base font-semibold">
-                  Items {fields.length > 1 && <span className="ml-1 text-sm font-normal text-muted-foreground">({fields.length} items, Total qty: {fields.reduce((s, _, i) => s + (Number(form.watch(`items.${i}.quantity`)) || 0), 0)})</span>}
-                </Label>
-                {!editEntry && (
-                  <Button
-                    type="button" variant="outline" size="sm"
-                    onClick={() => append({ item: '', quantity: 0, dispatched_quantity: 0, rate: 0 })}
-                    disabled={isMutating}
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" /> Add Item
-                  </Button>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                {fields.map((field, index) => (
-                  <div key={field.id} className="border rounded-lg p-4 space-y-3 relative bg-muted/10">
-                    {/* Item header */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        Item {index + 1}
-                      </span>
-                      {!editEntry && fields.length > 1 && (
-                        <Button
-                          type="button" variant="ghost" size="icon"
-                          className="h-6 w-6 text-destructive hover:text-destructive"
-                          onClick={() => remove(index)}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      {/* Item name with datalist autocomplete */}
-                      <div className="col-span-2 space-y-1">
-                        <Label className="text-xs">Item Name *</Label>
-                        <Input
-                          placeholder="Type or select item…"
-                          list="items-datalist"
-                          {...form.register(`items.${index}.item`)}
-                          disabled={isMutating}
-                        />
-                        {form.formState.errors.items?.[index]?.item && (
-                          <p className="text-xs text-destructive">{form.formState.errors.items[index]?.item?.message}</p>
-                        )}
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Total Quantity *</Label>
-                        <Input type="number" min="0" step="any" placeholder="0" {...form.register(`items.${index}.quantity`)} disabled={isMutating} />
-                        {form.formState.errors.items?.[index]?.quantity && (
-                          <p className="text-xs text-destructive">{form.formState.errors.items[index]?.quantity?.message}</p>
-                        )}
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Dispatched Qty</Label>
-                        <Input type="number" min="0" step="any" placeholder="0" {...form.register(`items.${index}.dispatched_quantity`)} disabled={isMutating} />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Rate (₹) *</Label>
-                        <Input type="number" min="0" step="any" placeholder="0.00" {...form.register(`items.${index}.rate`)} disabled={isMutating} />
-                        {form.formState.errors.items?.[index]?.rate && (
-                          <p className="text-xs text-destructive">{form.formState.errors.items[index]?.rate?.message}</p>
-                        )}
-                      </div>
-                      <div className="flex items-end">
-                        <ItemAmountPreview control={form.control} index={index} />
-                      </div>
-                    </div>
-                  </div>
-                ))}
               </div>
             </div>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)} disabled={isMutating}>Cancel</Button>
               <Button type="submit" disabled={isMutating}>
-                {isMutating ? 'Saving…' : editEntry ? 'Save Changes' : `Add ${fields.length > 1 ? `${fields.length} Items` : 'Entry'}`}
+                {isMutating ? 'Saving…' : editEntry ? 'Save Changes' : 'Save Transport Entry'}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirm */}
+      {/* Delete Confirmation */}
       <AlertDialog open={!!deleteEntry} onOpenChange={open => !open && setDeleteEntry(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Transport Entry?</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete <strong>{deleteEntry?.item}</strong> under LR <strong>{deleteEntry?.lr_number}</strong>? This cannot be undone.
+              Delete entry for LR <strong>{deleteEntry?.lr_number}</strong>? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
